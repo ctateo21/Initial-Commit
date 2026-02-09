@@ -1,0 +1,434 @@
+import { pgTable, text, serial, integer, boolean, json, date, timestamp, varchar, unique } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod";
+
+// Main user table
+export const users = pgTable("users", {
+  id: serial("id").primaryKey(),
+  username: text("username").notNull().unique(),
+  password: text("password").notNull(),
+  email: text("email").notNull().unique(),
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name").notNull(),
+  phone: text("phone"),
+  contactPreference: text("contact_preference").default("email"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const services = pgTable("services", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull().unique(),
+  displayName: text("display_name").notNull(),
+  description: text("description").notNull(),
+  options: json("options").$type<string[]>().notNull(),
+});
+
+export const submissions = pgTable("submissions", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id"),
+  selectedServices: json("selected_services").$type<string[]>().notNull(),
+  formData: json("form_data").notNull(),
+  status: text("status").default("pending"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Integration data
+export const integrationRequests = pgTable("integration_requests", {
+  id: serial("id").primaryKey(),
+  submissionId: integer("submission_id").notNull(),
+  provider: text("provider").notNull(), // "netcalcsheet", "arive", "canopy"
+  requestData: json("request_data").notNull(),
+  responseData: json("response_data"),
+  status: text("status").default("pending"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Questionnaire responses table for tracking user progress
+export const questionnaireResponses = pgTable("questionnaire_responses", {
+  id: serial("id").primaryKey(),
+  sessionId: text("session_id").notNull(), // Unique session identifier
+  serviceType: text("service_type").notNull(), // mortgage, realEstate, insurance, etc.
+  stepName: text("step_name").notNull(), // initial, property-type, financing, etc.
+  responseData: json("response_data").notNull(), // The actual form data
+  isCompleted: boolean("is_completed").default(false), // Whether this step is completed
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Schema for user input validation
+export const insertUserSchema = createInsertSchema(users)
+  .omit({
+    id: true,
+    createdAt: true,
+  });
+
+export const insertSubmissionSchema = createInsertSchema(submissions)
+  .omit({
+    id: true,
+    createdAt: true,
+  });
+
+export const insertIntegrationRequestSchema = createInsertSchema(integrationRequests)
+  .omit({
+    id: true,
+    createdAt: true,
+  });
+
+// Define form validation schemas
+export const realEstateFormSchema = z.object({
+  // Common fields
+  intent: z.enum(["buy", "sell", "both"]),
+  propertyType: z.enum(["residential", "commercial", "industrial", "land"]).optional(),
+  
+  // For Buy intent
+  purchaseMethod: z.enum(["cash", "mortgage"]).optional(),
+  purchasePrice: z.string().optional(),
+  propertyAddress: z.string().optional(),
+  
+  // For Sell intent
+  sellingPrice: z.string().optional(),
+  sellingAddress: z.string().optional(),
+  
+  // For Both intent (Buy & Sell)
+  sellType: z.enum(["primary", "1031exchange"]).optional(),
+  buyType: z.enum(["primary", "other"]).optional(),
+  
+  // Legacy fields
+  location: z.string().optional(),
+  priceRangeMin: z.string().optional(),
+  priceRangeMax: z.string().optional(),
+});
+
+export const mortgageFormSchema = z.object({
+  // Address or ZIP
+  locationType: z.enum(["address", "zipcode"]),
+  propertyAddress: z.string().optional(),
+  zipCode: z.string().optional(),
+  
+  // Property value
+  estimatedValue: z.string().optional(),
+  purchasePrice: z.string().optional(),
+  
+  // Mortgage details
+  type: z.enum(["purchase", "refinance"]),
+  ownershipType: z.enum(["primary", "secondary", "investment"]).optional(),
+  
+  // Original fields (for backward compatibility)
+  propertyValue: z.string().optional(),
+  mortgageBalance: z.string().optional(),
+  creditScore: z.string().optional(),
+});
+
+export const mortgagePropertyTypeSchema = z.object({
+  // Basic info from previous form
+  type: z.enum(["purchase", "refinance"]),
+  ownershipType: z.enum(["primary", "secondary", "investment"]),
+  
+  // Property type - different options based on ownership type
+  propertyType: z.string(),
+});
+
+export const mortgageFinancingSchema = z.object({
+  // Credit score range
+  creditScore: z.enum([
+    "780+",
+    "760-779",
+    "740-759",
+    "720-739",
+    "700-719",
+    "680-699",
+    "660-679",
+    "640-659",
+    "620-639",
+    "600-619",
+    "580-599",
+    "580 and below"
+  ]),
+  
+  // Loan type - changes based on ownership type
+  loanType: z.string(),
+  
+  // Optional Non-QM specific fields
+  nonQMType: z.string().optional(),
+});
+
+export const mortgageIncomeSchema = z.object({
+  // Main income type
+  incomeType: z.enum(["salary-w2", "hourly", "self-employed", "retired"]),
+  
+  // Salary/W2 specific fields
+  salaryType: z.enum(["salary-only", "salary-commission", "salary-bonus", "salary-rsu"]).optional(),
+  baseSalary: z.string().optional(),
+  commissionAverage: z.string().optional(),
+  bonusAverage: z.string().optional(),
+  vestedRsuBalance: z.string().optional(),
+  companyTickerSymbol: z.string().optional(),
+  
+  // Hourly specific fields
+  hourlyRate: z.string().optional(),
+  hoursPerWeek: z.string().optional(),
+  
+  // Self-employed specific fields
+  businessType: z.enum(["1099-personal", "1099-business", "s-corp", "c-corp"]).optional(),
+  grossAverage: z.string().optional(),
+  netIncome: z.string().optional(),
+  w2Income: z.string().optional(),
+  k1Amount: z.string().optional(),
+  cCorpNetProfit: z.string().optional(),
+  businessOwnershipPercentage: z.string().optional(),
+  
+  // Retired specific fields (can select multiple)
+  socialSecurityIncome: z.string().optional(),
+  disabilityIncome: z.string().optional(),
+  disabilityType: z.enum(["social-security", "va", "other"]).optional(),
+  pensionIncome: z.string().optional(),
+  rmdIncome: z.string().optional(),
+});
+
+export const insuranceFormSchema = z.object({
+  // Step 1: Insurance category selection
+  insuranceCategory: z.enum(["residential", "commercial"]).optional(),
+  
+  // Step 2a: Residential insurance types (multiple selection allowed)
+  residentialTypes: z.array(z.enum(["auto", "home", "flood", "general-liability"])).optional(),
+  
+  // Step 2b: Commercial insurance types (multiple selection allowed)  
+  commercialTypes: z.array(z.enum(["property", "business-owners-policy", "flood", "other"])).optional(),
+  
+  // Step 3: Quote type selection
+  quoteType: z.enum(["new", "current"]).optional(),
+  
+  // For new insurance path - Personal information
+  firstName: z.string().optional(),
+  lastName: z.string().optional(), 
+  email: z.string().optional(),
+  dateOfBirth: z.string().optional(),
+  
+  // Property information
+  currentAddress: z.string().optional(),
+  currentAddressPlaceId: z.string().optional(),
+  newAddress: z.string().optional(),
+  newAddressPlaceId: z.string().optional(),
+  hasMortgage: z.boolean().optional(),
+  propertyType: z.enum(["primary", "secondary", "investment"]).optional(),
+  
+  // Investment property specific
+  rentalTerm: z.enum([
+    "1-2-nights", 
+    "3-7-nights", 
+    "7-30-nights", 
+    "30-plus-days", 
+    "90-plus-days", 
+    "annual"
+  ]).optional(),
+  
+  // Legacy fields for backward compatibility
+  type: z.enum(["auto", "property", "other"]).optional(),
+  currentProvider: z.string().optional(),
+  coverageAmount: z.string().optional(),
+  additionalInfo: z.string().optional(),
+  address: z.string().optional(),
+  placeId: z.string().optional(),
+  notes: z.string().optional(),
+}).superRefine((data, ctx) => {
+  // Validate insurance category and types
+  if (data.insuranceCategory) {
+    if (data.insuranceCategory === "residential") {
+      if (!data.residentialTypes || data.residentialTypes.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Please select at least one residential insurance type",
+          path: ["residentialTypes"],
+        });
+      }
+    } else if (data.insuranceCategory === "commercial") {
+      if (!data.commercialTypes || data.commercialTypes.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Please select at least one commercial insurance type",
+          path: ["commercialTypes"],
+        });
+      }
+    }
+  }
+  
+  // Apply conditional validation for new insurance path
+  if (data.quoteType === "new") {
+    // Require personal information for new insurance
+    if (!data.firstName || data.firstName.trim() === "") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "First name is required",
+        path: ["firstName"],
+      });
+    }
+    
+    if (!data.lastName || data.lastName.trim() === "") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Last name is required",
+        path: ["lastName"],
+      });
+    }
+    
+    if (!data.email || data.email.trim() === "") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Email is required",
+        path: ["email"],
+      });
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Valid email is required",
+        path: ["email"],
+      });
+    }
+    
+    if (!data.dateOfBirth || data.dateOfBirth.trim() === "") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Date of birth is required",
+        path: ["dateOfBirth"],
+      });
+    }
+    
+    if (!data.propertyType) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Property type is required",
+        path: ["propertyType"],
+      });
+    }
+    
+    // Require rental term for investment properties
+    if (data.propertyType === "investment" && !data.rentalTerm) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Rental term is required for investment properties",
+        path: ["rentalTerm"],
+      });
+    }
+    
+    // Require at least one address
+    if ((!data.currentAddress || data.currentAddress.trim() === "") && 
+        (!data.newAddress || data.newAddress.trim() === "")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "At least one address is required",
+        path: ["currentAddress"],
+      });
+    }
+  }
+});
+
+export const constructionFormSchema = z.object({
+  type: z.enum(["build", "rehab"]),
+  projectType: z.string().min(1, "Project type is required"),
+  budget: z.string().min(1, "Budget is required"),
+  timeline: z.string().optional(),
+});
+
+export const propertyManagementFormSchema = z.object({
+  type: z.enum(["manage", "rentals"]),
+  propertyCount: z.string().min(1, "Property count is required"),
+  propertyType: z.enum(["residential", "commercial", "mixed"]),
+  location: z.string().optional(),
+});
+
+export const homeServicesFormSchema = z.object({
+  serviceType: z.string().min(1, "Service type is required"),
+  urgency: z.enum(["emergency", "soon", "planning"]),
+  description: z.string().optional(),
+});
+
+export const contactFormSchema = z.object({
+  firstName: z.string().min(1, "First name is required"),
+  lastName: z.string().min(1, "Last name is required"),
+  email: z.string().email("Invalid email address"),
+  phone: z.string().min(10, "Phone number must be at least 10 digits"),
+  contactPreference: z.enum(["email", "phone", "text"]),
+  termsAgreed: z.boolean().refine(val => val === true, {
+    message: "You must agree to the terms and conditions",
+  }),
+});
+
+// Export types
+export type InsertUser = z.infer<typeof insertUserSchema>;
+export type User = typeof users.$inferSelect;
+
+export type InsertSubmission = z.infer<typeof insertSubmissionSchema>;
+export type Submission = typeof submissions.$inferSelect;
+
+export type InsertIntegrationRequest = z.infer<typeof insertIntegrationRequestSchema>;
+export type IntegrationRequest = typeof integrationRequests.$inferSelect;
+
+export type RealEstateFormData = z.infer<typeof realEstateFormSchema>;
+export type MortgageFormData = z.infer<typeof mortgageFormSchema>;
+export type MortgagePropertyTypeData = z.infer<typeof mortgagePropertyTypeSchema>;
+export type MortgageFinancingData = z.infer<typeof mortgageFinancingSchema>;
+export type MortgageIncomeData = z.infer<typeof mortgageIncomeSchema>;
+export type InsuranceFormData = z.infer<typeof insuranceFormSchema>;
+export type ConstructionFormData = z.infer<typeof constructionFormSchema>;
+export type PropertyManagementFormData = z.infer<typeof propertyManagementFormSchema>;
+export type HomeServicesFormData = z.infer<typeof homeServicesFormSchema>;
+export type ContactFormData = z.infer<typeof contactFormSchema>;
+
+// Service type definitions
+export const serviceCategories = [
+  {
+    id: "real-estate",
+    displayName: "Real Estate",
+    description: "Buy or sell residential and commercial properties with our expert agents.",
+    options: ["Buy", "Sell"],
+    imageUrl: "https://images.unsplash.com/photo-1582407947304-fd86f028f716?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=1740&q=80"
+  },
+  {
+    id: "mortgage",
+    displayName: "Mortgage",
+    description: "Get the best rates for new mortgages, refinancing, or cash-out options.",
+    options: ["Purchase", "Refinance"],
+    imageUrl: "https://images.unsplash.com/photo-1589939705384-5185137a7f0f?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=1740&q=80"
+  },
+  {
+    id: "insurance",
+    displayName: "Insurance",
+    description: "Protect your investments with comprehensive insurance coverage.",
+    options: ["Auto", "Property", "Other"],
+    imageUrl: "https://images.unsplash.com/photo-1450101499163-c8848c66ca85?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=1740&q=80"
+  },
+  {
+    id: "construction",
+    displayName: "Construction",
+    description: "Build your dream home or renovate your existing property with our construction services.",
+    options: ["Build", "Rehab"],
+    imageUrl: "https://images.unsplash.com/photo-1541888946425-d81bb19240f5?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=1740&q=80"
+  },
+  {
+    id: "property-management",
+    displayName: "Property Management",
+    description: "Let us handle the day-to-day management of your properties or find the perfect rental.",
+    options: ["Manage", "Rentals"],
+    imageUrl: "https://images.unsplash.com/photo-1556912172-45b7abe8b7e1?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=1740&q=80"
+  },
+  {
+    id: "home-services",
+    displayName: "Home Services",
+    description: "Access a wide range of home services from repairs to maintenance and more.",
+    options: ["Maintenance", "Other"],
+    imageUrl: "https://images.unsplash.com/photo-1581578731548-c64695cc6952?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=1740&q=80"
+  }
+];
+
+export type ServiceCategory = typeof serviceCategories[0];
+
+// Insert and select types for questionnaire responses
+export const insertQuestionnaireResponseSchema = createInsertSchema(questionnaireResponses)
+  .omit({
+    id: true,
+    createdAt: true,
+    updatedAt: true,
+  });
+
+export type InsertQuestionnaireResponse = z.infer<typeof insertQuestionnaireResponseSchema>;
+export type QuestionnaireResponse = typeof questionnaireResponses.$inferSelect;
